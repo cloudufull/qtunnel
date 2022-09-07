@@ -135,10 +135,7 @@ switchmode=true
 ```
 
 now, we can run it by:
-```./bin/qtunnel -daemon -conf=/etc/conn.conf -logto=syslog
-   ./bin/qtunnel -daemon -conf=/etc/conn.conf -logto=syslog -tag speed_limit
-
-```
+```./bin/qtunnel -daemon -conf=/etc/conn.conf -logto=syslog```
 
 ### utils
 
