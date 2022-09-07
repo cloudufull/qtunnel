@@ -134,9 +134,6 @@ now, we can run it by:
 
 ```
 
-### utils
-
-`utils/manage_qtunnel`: manage the qtunnel through the config file.
 
 ### License
 
