@@ -16,13 +16,7 @@ qtunnel is writen in [golang 1.3.1](http://golang.org/dl/), after building it ca
 
 ### Build
 
-To build `qtunnel`
-
-`$ make`
-
-To test `qtunnel`
-
-`$ make test`
+go build  -o qtunnel .
 
 ### Usage
 
