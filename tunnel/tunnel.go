@@ -7,7 +7,9 @@ import (
     "time"
     "sync/atomic"
     "strconv"
+    "encoding/binary"
     "github.com/juju/ratelimit"
+    "github.com/pierrec/lz4/v4"
 )
 
 type Tunnel struct {
@@ -18,9 +20,10 @@ type Tunnel struct {
     sessionsCount int32
     pool *recycler
     limit_buket *ratelimit.Bucket 
+    wtmout int64
 }
 
-func NewTunnel(faddr, baddr string, clientMode int, cryptoMethod, secret string, size uint32,speed int64) *Tunnel {
+func NewTunnel(faddr, baddr string, clientMode int, cryptoMethod, secret string, size uint32,speed int64,tmwt int64) *Tunnel {
     a1, err := net.ResolveTCPAddr("tcp", faddr)
     if err != nil {
         log.Fatalln("resolve frontend error:", err)
@@ -43,6 +46,7 @@ func NewTunnel(faddr, baddr string, clientMode int, cryptoMethod, secret string,
         sessionsCount: 0,
         pool: NewRecycler(size),
         limit_buket: bucket,
+        wtmout: tmwt,
     }
 }
 
@@ -54,7 +58,7 @@ func (t *Tunnel) pipe(dst, src *Conn, c chan int64) {
     var n int64;var err error
     if t.limit_buket!=nil{
        n, err = io.Copy(dst, ratelimit.Reader(src,t.limit_buket))
-    }else{
+    } else {
        n, err = io.Copy(dst, src)
     }
     if err != nil {
@@ -78,20 +82,25 @@ func (t *Tunnel) transport(conn net.Conn) {
     var readBytes, writeBytes int64
     atomic.AddInt32(&t.sessionsCount, 1)
     var bconn, fconn *Conn
-    //1 client 2 server 3 switch_mode
+    //1 client ,2 server ,3 switch_mode ,11 compress_client ,12 compress_server 
     switch t.clientMode {
-           case 1:
-                fconn = NewConn(conn, nil, t.pool)
-                bconn = NewConn(conn2, cipher, t.pool)
-           case 2:
-                fconn = NewConn(conn, cipher, t.pool)
-                bconn = NewConn(conn2, nil, t.pool)
+           case 1,2:
+                fconn = NewConn(conn, nil, t.pool,t.wtmout)
+                bconn = NewConn(conn2, cipher, t.pool,t.wtmout)
+                go t.pipe(bconn, fconn, writeChan)
+                go t.pipe(fconn, bconn, readChan)
            case 3:
-                fconn = NewConn(conn, nil, t.pool)
-                bconn = NewConn(conn2, nil, t.pool)
+                fconn = NewConn(conn, cipher, t.pool,t.wtmout)
+                bconn = NewConn(conn2, nil, t.pool,t.wtmout)
+                go t.pipe(bconn, fconn, writeChan)
+                go t.pipe(fconn, bconn, readChan)
+           case 11:
+                go compress(conn,conn2) 
+                go uncompress(conn2,conn) 
+           case 12:
+                go compress(conn2,conn) 
+                go uncompress(conn,conn2) 
     }
-    go t.pipe(bconn, fconn, writeChan)
-    go t.pipe(fconn, bconn, readChan)
     readBytes = <-readChan
     writeBytes = <-writeChan
     transferTime := time.Now().Sub(start)
@@ -116,3 +125,75 @@ func (t *Tunnel) Start() {
         go t.transport(conn)
     }
 }
+
+// read conn1 after compress write to conn2
+func compress(conn1 ,conn2 net.Conn) {
+    defer func(){
+          conn1.Close()
+          conn2.Close()
+    }()
+    mtu := 32768 
+    packet := make([]byte, mtu)
+    result := make([]byte, lz4.CompressBlockBound(int(1500))+2)
+    bs := make([]byte, 2)
+    alert_tms := 0
+    for {
+        n, err := conn1.Read(packet)
+        if err != nil {
+           if alert_tms < 1 {
+               log.Printf("Disconnect %s\n", conn1.RemoteAddr().String())
+               log.Printf("(%d) compress error  : %v\n", alert_tms,err) 
+               alert_tms = 2 
+           }
+           continue
+        }
+        alert_tms = 0
+        zn, _ := lz4.CompressBlock(packet[:n], result[2:], nil)
+        binary.LittleEndian.PutUint16(bs, uint16(zn))
+        copy(result, bs)
+        conn2.Write(result[:zn+2])
+    }
+}
+
+// read from conn1 then uncompress to conn2 
+func uncompress(conn1 ,conn2 net.Conn) {
+    defer func(){
+          conn1.Close()
+          conn2.Close()
+    }()
+    mtu := 32768 
+    packet := make([]byte, lz4.CompressBlockBound(int(1500))+2)
+    result := make([]byte, mtu)
+    stream := make([]byte, 0)
+    alert_tms := 0
+    for {
+        left, err := conn1.Read(packet)
+        if err != nil {
+            if alert_tms < 1 {
+               log.Printf("Disconnect %s\n", conn1.RemoteAddr().String())
+               log.Printf("(%d) uncompress error  : %v\n", alert_tms,err) 
+               alert_tms = 2 
+            }
+            continue
+        }
+        alert_tms = 0
+        stream = append(stream, packet[:left]...)
+
+        for len(stream) > 2 {
+            bs := binary.LittleEndian.Uint16(stream[:2])
+            if len(stream) < int(bs)+2 {
+                break
+            }
+            n, err := lz4.UncompressBlock(stream[2:bs+2], result)
+            if err != nil {
+                log.Print(err)
+                stream = stream[2+bs:]
+                break
+            }
+            stream = stream[2+bs:]
+            conn2.Write(result[:n])
+        }
+    }
+
+}
+

@@ -13,6 +13,7 @@ import (
 	"qtunnel/tunnel"
 	"time"
 	"net"
+    "strings"
 )
 
 func isTagInSection(sections []string, tag string) bool {
@@ -52,6 +53,7 @@ func check_port(addr string) bool {
 func main() {
 	var faddr, baddr, cryptoMethod, secret, logTo, conf, tag string
     var speed int64
+    var wtmout int64
 	var clientMode, daemon,switchMode bool
 	var buffer uint
     var trans_mode int =1 // 1 client 2 server 3 switch_mode
@@ -60,13 +62,26 @@ func main() {
 	flag.StringVar(&baddr, "backend", "127.0.0.1:6400", "host:port of the backend")
 	flag.StringVar(&cryptoMethod, "crypto", "rc4", "encryption method")
 	flag.StringVar(&secret, "secret", "", "password used to encrypt the data")
-	flag.StringVar(&conf, "conf", "", "read connection setup from config file")
 	flag.StringVar(&tag, "tag", "", "only setup the tag in config file")
 	flag.UintVar(&buffer, "buffer", 4096, "tunnel buffer size")
 	flag.BoolVar(&clientMode, "clientmode", false, "if running at client mode")
 	flag.BoolVar(&switchMode, "switchmode", false, "wether runing at switchMode,redirect port without secret")
 	flag.BoolVar(&daemon, "daemon", false, "running in daemon mode")
     flag.Int64Var(&speed,"speed", 0, "transmission speed rate MBps")
+    flag.Int64Var(&wtmout,"timeout", 30, "close connection after it stay idle $timeout  minutes  ")
+	flag.StringVar(&conf, "conf", "", `read connection setup from config file:
+    eg:
+       [compress] 
+       faddr = 10.3.246.149:1316  # from local
+       baddr = 10.3.246.150:1316  # trans to remote
+       cryptoMethod = rc4         # only support rc4 .... 
+       secret = 1xtneltgt1gdraa.6 # encryption key  
+       clientmode = true   # when in server side  clientmode=false
+       switchmode=true     # when switch=true ,trans data no need secret and cryptoMethod encrypt any more ！
+       compress=1          # when switchmode=true  clientmode is set and  compress=true ,use lz4 compress net flow
+       timeout=180         # conn be idle 180min disconnect
+       speed=5             # transmission speed rate MBps, here example meas limit 5MBps 
+     `)
 	flag.Parse()
 
 	log.SetOutput(os.Stdout)
@@ -97,26 +112,35 @@ func main() {
 			if s == "default" {
 				continue
 			}
-            var secrt,sec string
-            sec=s
+            var secrt string
             fdr, err := c.GetString(s, "faddr")
             bdr, err := c.GetString(s, "baddr")
             cmd, err := c.GetBool(s, "clientmode")
             smd, err := c.GetBool(s, "switchmode")
+            compr, err := c.GetBool(s, "compress")
             cmth, err := c.GetString(s, "cryptoMethod")
             speed, err := c.GetInt64(s, "speed")
-
             if (err!=nil){speed=0}
-            if smd {
+
+            if smd  {
                trans_mode=3
                cmth="rc4"
                secrt="secret"
+               
+               if compr && cmd {
+                  trans_mode=11
+               }
+
+               if compr && !cmd {
+                  trans_mode=12
+               }
+
             }else{
                  secrt, err = c.GetString(s, "secret")
                  if (err != nil) {
                     log.Fatalln("qtunnel config error with tag: %s, : -> can't run without secret under secret tunnel mode !!", tag)
                     os.Exit(1)
-                 }
+                }
                 switch cmd {
                        case true:
                            trans_mode=1
@@ -124,10 +148,11 @@ func main() {
                            trans_mode=2
                 }
             }
+
             
             if (len(tag) > 0) {
-                if (s==tag){
-		           if !isTagInSection(sections, tag) {
+                if (s==strings.ToLower(tag)){
+		           if !isTagInSection(sections, strings.ToLower(tag)) {
 		           	log.Printf("can not find tag %s, exit!", tag)
 		           	os.Exit(1)
 		           }
@@ -136,8 +161,14 @@ func main() {
 		    	   		os.Exit(1)
 		    	   		continue
 		    	   }
+                   wtmout, err := c.GetInt64(s, "timeout")
+                   if (err!=nil){
+                       wtmout=30
+                       log.Printf(`wtmout args need int type ,switch to 30min %s`,err)
+                   }
+                    log.Printf(`set timeout to %d s`,wtmout)
 			        go func() {
-			        	t := tunnel.NewTunnel(fdr, bdr, trans_mode, cmth, secrt, uint32(buffer),speed)
+			        	t := tunnel.NewTunnel(fdr, bdr, trans_mode, cmth, secrt, uint32(buffer),speed,wtmout)
 			        	log.Printf("qtunnel start from %s to %s. use tag %s", fdr, bdr,tag)
 			        	t.Start()
 			        }()
@@ -149,11 +180,19 @@ func main() {
 		    			os.Exit(1)
 		    			continue
 		    	}
-			     go func() {
-			        t := tunnel.NewTunnel(fdr, bdr, trans_mode, cmth, secrt, uint32(buffer),speed)
-			        log.Printf("qtunnel all tag ,now start %s from %s to %s.",sec,fdr,bdr)
-			     	t.Start()
-			     }()
+
+                wtmout, err := c.GetInt64(s, "timeout")
+                if (err!=nil){
+                    wtmout=30
+                    log.Printf(`wtmout args need int type ,switch to 30min %s`,err)
+                }
+
+                log.Printf(`set timeout to %d s`,wtmout)
+			    go func() {
+			       t := tunnel.NewTunnel(fdr, bdr, trans_mode, cmth, secrt, uint32(buffer),speed,wtmout)
+			       log.Printf("qtunnel all tag ,now start %s from %s to %s.",s,fdr,bdr)
+			    	t.Start()
+			    }()
             }
 		}
 	} else {
@@ -173,7 +212,8 @@ func main() {
                       trans_mode=2 
            }
         } 
-		t := tunnel.NewTunnel(faddr, baddr, trans_mode, cryptoMethod, secret, uint32(buffer),speed)
+        log.Printf(`set timeout to %d s`,wtmout)
+		t := tunnel.NewTunnel(faddr, baddr, trans_mode, cryptoMethod, secret, uint32(buffer),speed,wtmout)
 		log.Println("qtunnel started.")
 		go t.Start()
 	}

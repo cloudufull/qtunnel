@@ -9,20 +9,23 @@ type Conn struct {
     conn net.Conn
     cipher *Cipher
     pool *recycler
+    wtmout int64
 }
 
-func NewConn(conn net.Conn, cipher *Cipher, pool *recycler) *Conn {
+func NewConn(conn net.Conn, cipher *Cipher, pool *recycler,tmwt int64) *Conn {
     return &Conn{
         conn: conn,
         cipher: cipher,
         pool: pool,
+        wtmout: tmwt,
     }
 }
 
 func (c *Conn) Read(b []byte) (int, error) {
-    c.conn.SetReadDeadline(time.Now().Add(30 * time.Minute))
+    c.conn.SetReadDeadline(time.Now().Add(time.Duration(c.wtmout) * time.Minute))
     if c.cipher == nil {
-        return c.conn.Read(b)
+       n, err := c.conn.Read(b)
+       return n, err
     }
     n, err := c.conn.Read(b)
     if n > 0 {
@@ -33,7 +36,8 @@ func (c *Conn) Read(b []byte) (int, error) {
 
 func (c *Conn) Write(b []byte) (int, error) {
     if c.cipher == nil {
-        return c.conn.Write(b)
+       n,err := c.conn.Write(b)
+       return n,err 
     }
     c.cipher.encrypt(b, b)
     return c.conn.Write(b)
