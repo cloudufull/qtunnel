@@ -20,33 +20,47 @@ go build  -o qtunnel .
 
 ### Usage
 
-	$ ./bin/qtunnel -h
-        Usage of ./qtunnel_limit_speed:
-          -backend string
-                host:port of the backend (default "127.0.0.1:6400")
-          -buffer uint
-                tunnel buffer size (default 4096)
-          -clientmode
-                if running at client mode
-          -conf string
-                read connection setup from config file
-          -crypto string
-                encryption method (default "rc4")
-          -daemon
-                running in daemon mode
-          -listen string
-                host:port qtunnel listen on (default ":9001")
-          -logto string
-                stdout or syslog (default "stdout")
-          -secret string
-                password used to encrypt the data
-          -speed int
-                transmission speed rate MBps
-          -switchmode
-                wether runing at switchMode,redirect port without secret
-          -tag string
-                only setup the tag in config file
- 		
+        $ [root@data-backup qtunnel]# ./qtunnel  -h
+	Usage of ./qtunnel:
+	  -backend string
+	        host:port of the backend (default "127.0.0.1:6400")
+	  -buffer uint
+	        tunnel buffer size (default 4096)
+	  -clientmode
+	        if running at client mode
+	  -conf string
+	        read connection setup from config file:
+	            eg:
+	               [compress] 
+	               faddr = 10.3.246.149:1316  # from local
+	               baddr = 10.3.246.150:1316  # trans to remote
+	               cryptoMethod = rc4         # only support rc4 .... 
+	               secret = 1xtneltgt1gdraa.6 # encryption key  
+	               clientmode = true   # when in server side  clientmode=false
+	               switchmode=true     # when switch=true ,trans data no need secret and cryptoMethod encrypt any more ！
+	               compress=1          # when switchmode=true  clientmode is set and  compress=true ,use lz4 compress net flow
+	               timeout=180         # conn be idle 180min disconnect
+	               speed=5             # transmission speed rate MBps, here example meas limit 5MBps 
+	             
+	  -crypto string
+	        encryption method (default "rc4")
+	  -daemon
+	        running in daemon mode
+	  -listen string
+	        host:port qtunnel listen on (default ":9001")
+	  -logto string
+	        stdout or syslog (default "stdout")
+	  -secret string
+	        password used to encrypt the data
+	  -speed int
+	        transmission speed rate MBps
+	  -switchmode
+	        wether runing at switchMode,redirect port without secret
+	  -tag string
+	        only setup the tag in config file
+	  -timeout int
+	        close connection after it stay idle $timeout  minutes   (default 30)
+	 		
 `qtunnel` supports two encryption methods: `rc4` and `aes256cfb`. Both servers and clients should use the same `crypto` and same `secret`.
 
 ### Example
